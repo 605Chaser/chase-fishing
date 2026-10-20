@@ -380,7 +380,7 @@
     for (let i = i0; i < Math.min(F.t.length, i0 + 18); i++) { if (F.wc[i] >= 95) { storm = F.t[i]; break; } }
 
     return {
-      now: now, i0: i0, d0: d0, astros: astros, today: ctx.astro(now), scores: scores,
+      now: now, i0: i0, d0: d0, astros: astros, today: ctx.astro(now), scores: scores, bestIdx: bi,
       overall: overall, label: labelFor(overall), why: why,
       window: { start: winStart, end: winEnd, avg: Math.round(bavg) },
       trend: trendOf(F, i0), front: front, storm: storm
