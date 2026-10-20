@@ -1,6 +1,6 @@
 // Offline support: keeps the app itself available with no signal.
 // Weather data is cached by the app (last forecast per spot), so this only handles the app shell.
-const CACHE = 'fishing-v2';
+const CACHE = 'fishing-v3';
 const SHELL = [
   './', './index.html', './core.js', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png', './icon-180.png',
   'https://cdn.jsdelivr.net/npm/suncalc@1.9.0/suncalc.js',

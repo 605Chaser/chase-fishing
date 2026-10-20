@@ -111,6 +111,11 @@ h2{margin:0;font-family:var(--font-display);font-size:21px;font-weight:600}
 .tabs button[aria-current="page"]{color:var(--ink);font-weight:700}
 #map{height:52vh;min-height:300px;max-height:560px;border-radius:20px;overflow:hidden;border:1px solid var(--line);background:var(--track)}
 .leaflet-container{font-family:var(--font-body)}
+.maptools{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.seg{display:inline-flex;border:1.5px solid var(--line);border-radius:12px;overflow:hidden;flex-shrink:0}
+.seg button{min-height:44px;padding:0 14px;border:none;background:var(--surface);color:var(--muted);font-weight:600;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--deep);color:var(--deep-ink)}
+#shoreStatus{min-width:0;flex:1 1 180px}
 .pin{display:inline-block;padding:4px 9px;border-radius:12px;background:var(--surface);border:1.5px solid var(--ink);color:var(--ink);font-family:var(--font-display);font-weight:700;font-size:17px;white-space:nowrap;transform:translate(-50%,-100%);box-shadow:0 2px 6px rgba(0,0,0,.2)}
 .pin.best{background:var(--cta);border-color:var(--cta);color:var(--cta-ink)}
 .me{width:18px;height:18px;border-radius:9px;background:var(--teal);border:3px solid #fff;box-shadow:0 0 0 2px var(--teal);transform:translate(-50%,-50%)}
@@ -211,7 +216,18 @@ h2{margin:0;font-family:var(--font-display);font-size:21px;font-weight:600}
   <main id="view-spots" class="view" hidden>
     <div class="grid">
       <div class="col">
+        <div class="maptools">
+          <div class="seg" role="group" aria-label="Which wind to show on shorelines">
+            <button id="wNow" aria-pressed="true">Wind now</button>
+            <button id="wBest" aria-pressed="false">At best window</button>
+          </div>
+          <span class="note" id="shoreStatus" aria-live="polite"></span>
+        </div>
         <div id="map" aria-label="Map. Tap anywhere for an outlook."></div>
+        <div class="legend">
+          <span><i class="sw" style="height:5px;width:18px;background:var(--sun)"></i>Wind blowing onto shore</span>
+          <span><i class="sw" style="height:0;width:18px;border-top:3px dashed var(--teal);border-radius:0"></i>Calm, sheltered side</span>
+        </div>
         <section class="panel" id="pick" hidden></section>
         <div class="hint">Tap anywhere on the map for an instant outlook</div>
       </div>
@@ -347,6 +363,7 @@ function renderToday(){
   $('#windowKey').textContent = isTomorrow ? 'Best window tomorrow' : 'Best window today';
   $('#windowVal').textContent = t12(O.window.start, tz) + ' – ' + t12(O.window.end, tz);
   renderTimeline(); renderCards(); renderAlerts();
+  if (map) updateShores();
 }
 
 function renderAlerts(){
@@ -453,10 +470,58 @@ function initMap(){
   const loc = activeLoc();
   if (!window.L) { $('#map').innerHTML = '<div class="empty" style="margin:16px">The map needs a connection to load.</div>'; return; }
   if (map) { map.invalidateSize(); return; }
-  map = L.map('map', { zoomControl: true }).setView([loc.lat, loc.lon], 10);
+  map = L.map('map', { zoomControl: true }).setView([loc.lat, loc.lon], 12);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
+  shoreLayer = L.layerGroup().addTo(map);
   layer = L.layerGroup().addTo(map);
   map.on('click', e => pickPoint(e.latlng.lat, e.latlng.lng));
+  map.on('moveend', () => { clearTimeout(shoreTimer); shoreTimer = setTimeout(updateShores, 600); });
+  updateShores();
+}
+
+/* Wind-to-shore: color the shorelines the wind is blowing onto. */
+let shoreLayer = null, shoreTimer = null, windMode = 'now';
+const shoreCache = [];
+function shoreWind(){
+  if (!S.F || !S.O) return null;
+  const F = S.F, best = windMode === 'best';
+  const i = best ? C.idxAt(F, S.O.window.start) : S.O.i0;
+  return { from: F.wd[i], mph: F.ws[i], when: best ? 'at ' + t12(S.O.window.start, F.tz) : 'now' };
+}
+async function updateShores(){
+  if (!map || !shoreLayer) return;
+  const st = $('#shoreStatus'), w = shoreWind();
+  if (!w) { st.textContent = 'Waiting for wind data…'; return; }
+  if (map.getZoom() < 11) { shoreLayer.clearLayers(); st.textContent = 'Zoom in closer to see wind-blown shores.'; return; }
+  const b = map.getBounds();
+  const has = c => c.s <= b.getSouth() && c.w <= b.getWest() && c.n >= b.getNorth() && c.e >= b.getEast();
+  let hit = shoreCache.find(has);
+  if (!hit) {
+    st.textContent = 'Finding shorelines…';
+    const p = b.pad(0.5);
+    try {
+      const bodies = await C.getWaterBodies(p.getSouth(), p.getWest(), p.getNorth(), p.getEast());
+      hit = { s: p.getSouth(), w: p.getWest(), n: p.getNorth(), e: p.getEast(), bodies };
+      shoreCache.push(hit); if (shoreCache.length > 6) shoreCache.shift();
+    } catch(e) { st.textContent = "Couldn't load shorelines right now. Move the map to try again."; return; }
+  }
+  shoreLayer.clearLayers();
+  if (!hit.bodies.length) { st.textContent = 'No lakes or rivers in view.'; return; }
+  if (w.mph < 4) { st.textContent = 'Wind is calm ' + w.when + ', so no shore stands out.'; return; }
+  const css = getComputedStyle(document.documentElement);
+  const sun = css.getPropertyValue('--sun').trim() || '#D9661F', teal = css.getPropertyValue('--teal').trim() || '#1F7A8C';
+  C.classifyShores(hit.bodies, w.from, map.getCenter().lat).forEach(r => {
+    L.polyline(r.pts, r.cls === 'wind'
+      ? { color: sun, weight: 6, opacity: 0.9, interactive: false, lineCap: 'round' }
+      : { color: teal, weight: 4, opacity: 0.75, dashArray: '6 7', interactive: false }).addTo(shoreLayer);
+  });
+  st.textContent = C.card(w.from) + ' wind ' + Math.round(w.mph) + ' mph ' + w.when + '. Orange shores are taking it.';
+}
+function setWindMode(m){
+  windMode = m;
+  $('#wNow').setAttribute('aria-pressed', m === 'now' ? 'true' : 'false');
+  $('#wBest').setAttribute('aria-pressed', m === 'best' ? 'true' : 'false');
+  updateShores();
 }
 function drawMarkers(ranked){
   if (!map) return; layer.clearLayers();
@@ -639,6 +704,7 @@ function applyMode(){
   if (night) document.documentElement.setAttribute('data-mode', 'night'); else document.documentElement.removeAttribute('data-mode');
   $('#btnNight').setAttribute('aria-pressed', night ? 'true' : 'false');
   document.querySelector('meta[name="theme-color"]').setAttribute('content', night ? '#0C0404' : '#0E3A4A');
+  if (map) updateShores();
 }
 
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => show(b.dataset.view));
@@ -646,6 +712,7 @@ $('#btnLocate').onclick = locate;
 $('#btnRefresh').onclick = () => { load(); if (!$('#view-spots').hidden) renderCompare(); };
 $('#btnNight').onclick = () => { store.set('cf_night', !store.get('cf_night', false)); applyMode(); };
 $('#btnLog').onclick = openLog; $('#btnLog2').onclick = openLog;
+$('#wNow').onclick = () => setWindMode('now'); $('#wBest').onclick = () => setWindMode('best');
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sheetWrap').hidden) closeSheet(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.F && Date.now()/1000 - S.F.fetched > 1800) load(); });
 

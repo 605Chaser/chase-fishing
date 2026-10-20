@@ -124,6 +124,112 @@
     return town ? (town + (st ? ', ' + st : '')) : null;
   }
 
+  /* ---------- Shorelines and wind (OpenStreetMap water polygons) ---------- */
+
+  const samePt = (a, b) => Math.abs(a[0] - b[0]) < 1e-7 && Math.abs(a[1] - b[1]) < 1e-7;
+
+  // Join open way pieces (multipolygon members) into closed rings of [lat, lon].
+  function joinRings(parts) {
+    const rings = [], open = [];
+    parts.forEach(p => {
+      if (p.length < 2) return;
+      if (samePt(p[0], p[p.length - 1])) { if (p.length > 3) rings.push(p); } else open.push(p.slice());
+    });
+    while (open.length) {
+      let cur = open.shift(), grew = true;
+      while (!samePt(cur[0], cur[cur.length - 1]) && grew) {
+        grew = false;
+        for (let k = 0; k < open.length; k++) {
+          const o = open[k], end = cur[cur.length - 1];
+          if (samePt(end, o[0])) cur = cur.concat(o.slice(1));
+          else if (samePt(end, o[o.length - 1])) cur = cur.concat(o.slice().reverse().slice(1));
+          else continue;
+          open.splice(k, 1); grew = true; break;
+        }
+      }
+      if (samePt(cur[0], cur[cur.length - 1]) && cur.length > 3) rings.push(cur);
+    }
+    return rings;
+  }
+
+  function ringAreaKm2(r) {
+    const k = Math.cos(r[0][0] * Math.PI / 180) * 111.32, ky = 110.57;
+    let s = 0;
+    for (let i = 0; i < r.length - 1; i++) s += (r[i][1] * k) * (r[i + 1][0] * ky) - (r[i + 1][1] * k) * (r[i][0] * ky);
+    return Math.abs(s / 2);
+  }
+
+  // Even-odd test, so islands (inner rings) count as land.
+  function insideRings(pt, rings) {
+    let inside = false;
+    for (const r of rings) {
+      for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+        const yi = r[i][0], xi = r[i][1], yj = r[j][0], xj = r[j][1];
+        if ((yi > pt[0]) !== (yj > pt[0]) && pt[1] < (xj - xi) * (pt[0] - yi) / (yj - yi) + xi) inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  function waterBodiesFrom(elements, minKm2) {
+    const out = [];
+    (elements || []).forEach(el => {
+      let parts = [];
+      if (el.type === 'way' && el.geometry) parts = [el.geometry.map(p => [p.lat, p.lon])];
+      else if (el.type === 'relation' && el.members) {
+        parts = el.members.filter(m => m.type === 'way' && m.geometry && (m.role === 'outer' || m.role === 'inner' || !m.role))
+          .map(m => m.geometry.map(p => [p.lat, p.lon]));
+      }
+      const rings = joinRings(parts);
+      if (!rings.length) return;
+      const size = Math.max.apply(null, rings.map(ringAreaKm2));
+      if (size < (minKm2 == null ? 0.1 : minKm2)) return; // skip ponds and small sloughs
+      out.push({ name: (el.tags && el.tags.name) || null, rings: rings, km2: size });
+    });
+    return out;
+  }
+
+  // Lakes, reservoirs and river polygons inside a box (south, west, north, east).
+  async function getWaterBodies(s, w, n, e) {
+    const bb = [s, w, n, e].map(v => v.toFixed(4)).join(',');
+    const q = '[out:json][timeout:25];(way["natural"="water"](' + bb + ');relation["natural"="water"](' + bb + ');way["landuse"="reservoir"](' + bb + '););out geom;';
+    const j = await getJSON('https://overpass-api.de/api/interpreter', {
+      method: 'POST', body: 'data=' + encodeURIComponent(q),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    }, 30000);
+    return waterBodiesFrom(j.elements);
+  }
+
+  // Split every shoreline into runs: 'wind' = wind blowing onto this shore (bait gets pushed here),
+  // 'calm' = sheltered side. Within 60° of straight on counts.
+  function classifyShores(bodies, windFromDeg, lat0) {
+    const toward = ((windFromDeg + 180) % 360) * Math.PI / 180;
+    const T = [Math.sin(toward), Math.cos(toward)]; // x = east, y = north
+    const k = Math.cos(lat0 * Math.PI / 180);
+    const runs = [];
+    bodies.forEach(b => {
+      b.rings.forEach(r => {
+        let cur = null;
+        for (let i = 0; i < r.length - 1; i++) {
+          const A = r[i], B = r[i + 1];
+          const dx = (B[1] - A[1]) * k, dy = B[0] - A[0], L = Math.hypot(dx, dy);
+          if (L < 1e-6) continue;
+          const nl = [-dy / L, dx / L]; // left-hand normal
+          const off = Math.min(Math.max(L * 0.3, 0.00003), 0.0005);
+          const mid = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+          const leftIsWater = insideRings([mid[0] + nl[1] * off, mid[1] + nl[0] * off / k], b.rings);
+          const out = leftIsWater ? [-nl[0], -nl[1]] : nl; // points from water to land
+          const a = out[0] * T[0] + out[1] * T[1];
+          const cls = a >= 0.5 ? 'wind' : a <= -0.5 ? 'calm' : null;
+          if (cls && cur && cur.cls === cls) cur.pts.push(B);
+          else { if (cur) runs.push(cur); cur = cls ? { cls: cls, pts: [A, B], body: b.name } : null; }
+        }
+        if (cur) runs.push(cur);
+      });
+    });
+    return runs;
+  }
+
   /* ---------- Sun, moon and solunar ---------- */
 
   function phaseName(p) {
@@ -285,6 +391,8 @@
     card: card, card8: card8, hPa2in: hPa2in, angDiff: angDiff, dayStart: dayStart, localHour: localHour,
     haversineMi: haversineMi, getForecast: getForecast, normalizeForecast: normalizeForecast,
     getAlerts: getAlerts, getWater: getWater, getPlaceName: getPlaceName,
+    getWaterBodies: getWaterBodies, waterBodiesFrom: waterBodiesFrom, classifyShores: classifyShores,
+    joinRings: joinRings, insideRings: insideRings,
     phaseName: phaseName, astroDay: astroDay, trendOf: trendOf, scoreAt: scoreAt,
     outlook: outlook, labelFor: labelFor, idxAt: idxAt
   };
