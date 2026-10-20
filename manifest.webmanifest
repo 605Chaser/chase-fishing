@@ -1,0 +1,16 @@
+{
+  "name": "Chase's Fishing Outlook",
+  "short_name": "Fishing",
+  "description": "Live fishing conditions: outlook score, best window, pressure trend, wind, water temp, sun, moon and solunar times.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0E3A4A",
+  "theme_color": "#0E3A4A",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
