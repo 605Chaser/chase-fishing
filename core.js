@@ -119,7 +119,9 @@
     const j = await getJSON('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&lat=' + lat.toFixed(4) + '&lon=' + lon.toFixed(4), null, 8000);
     const a = j.address || {};
     const town = a.city || a.town || a.village || a.hamlet || a.county;
-    return town ? (town + (a.state ? ', ' + a.state : '')) : null;
+    const iso = a['ISO3166-2-lvl4'] || '';
+    const st = /^US-[A-Z]{2}$/.test(iso) ? iso.slice(3) : a.state;
+    return town ? (town + (st ? ', ' + st : '')) : null;
   }
 
   /* ---------- Sun, moon and solunar ---------- */
