@@ -2,11 +2,9 @@
 
 A free, installable web app (PWA) that runs on iPhone, Android and laptops from one set of files.
 
-## Put it online (free)
-The app has to be served over https so location and offline mode work. Any static host works:
-- **Netlify Drop:** go to app.netlify.com/drop and drag this whole folder in. You get a link in seconds.
-- **GitHub Pages:** push the folder to a repo, then Settings → Pages → deploy from the main branch.
-- **Cloudflare Pages:** connect the repo or upload the folder.
+## Where it's hosted
+GitHub Pages, from the `main` branch of this repo: https://605chaser.github.io/chase-fishing/
+Every push to `main` updates the live app within a minute or two.
 
 ## Install on a device
 - **iPhone (Safari):** open the link → Share → Add to Home Screen.
